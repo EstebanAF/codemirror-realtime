@@ -8,10 +8,12 @@ export default defineNuxtConfig({
       autoprefixer: {},
     },
   },
+  ssr: false,
   css: ["~/assets/css/main.css"],
+  modules: ["nuxt-codemirror"],
   runtimeConfig: {
     public: {
-      SUPABASE_SERVICE_ROLE: process.env.NUXT_PUBLIC_SUPABASE_SERVICE_ROLE,
+      SUPABASE_SERVICE_ROLE: "",
     },
   },
 });

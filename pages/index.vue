@@ -8,6 +8,7 @@
     <button @click="setGlobalId" class="bg-blue-500 p-2 rounded text-white">
       Set Global ID
     </button>
+    <codeMirror></codeMirror>
   </div>
 </template>
 <script setup>

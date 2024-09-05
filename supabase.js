@@ -1,7 +1,13 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = 'https://dxusbfemztqipqvlneat.supabase.co'
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE
-const supabase = createClient(supabaseUrl, supabaseKey)
+function supabasefun() {
+  const runtimeConfig = useRuntimeConfig();
+  const supabaseKey = runtimeConfig.public.SUPABASE_SERVICE_ROLE;
+  const supabaseUrl = "https://dxusbfemztqipqvlneat.supabase.co";
 
-export default supabase
+  const supabase = createClient(supabaseUrl, supabaseKey);
+  return supabase;
+}
+const supabase = supabasefun();
+
+export default supabase;
