@@ -10,4 +10,16 @@ function supabasefun() {
 }
 const supabase = supabasefun();
 
-export default supabase;
+async function getFile() {
+  let { data: file, error } = await supabase
+    .from("files")
+    .select("*")
+    .eq("github_repo_name", "manifest-project-CFE9NU")
+    .eq("branch", "main")
+    .eq("file_path", "api/index.js")
+    .single();
+  console.log(file.content);
+  return file.content;
+}
+
+export { supabase, getFile };

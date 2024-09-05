@@ -13,64 +13,28 @@ import {
 import { basicSetup } from "codemirror";
 import { ChangeSet, EditorState, Text } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import supabase from "~/supabase";
+import { supabase, getFile } from "~/supabase";
+import TestWorker from "~/worker/worker?worker";
 
-let { data: files, error } = await supabase
-  .from("files")
-  .select("*")
-  .eq("github_repo_name", "manifest-project-CFE9NU")
-  .eq("branch", "main")
-  .eq("file_path", "api/index.js");
-console.log(files);
-// The updates received so far (updates.length gives the current
-// version)
-let updates = [];
-// The current document
-let doc = Text.of(["Start document"]);
-
-//!authorityMessage
-
-let pending = [];
+supabase
+  .channel("custom-filter-channel")
+  .on(
+    "postgres_changes",
+    {
+      event: "*",
+      schema: "public",
+      table: "files",
+      filter: "github_repo_name=eq.manifest-project-CFE9NU",
+    },
+    (payload) => {
+      console.log("Change received!", payload);
+    },
+  )
+  .subscribe();
 
 function createConnectionWorker() {
   if (typeof Worker !== "undefined") {
-    const worker = new Worker(new URL("../worker/worker.js", import.meta.url));
-    worker.onmessage = (event) => {
-      console.log(event.data);
-      function resp(value) {
-        event.ports[0].postMessage(JSON.stringify(value));
-      }
-      let data = JSON.parse(event.data);
-      if (data.type == "pullUpdates") {
-        if (data.version < updates.length) resp(updates.slice(data.version));
-        else pending.push(resp);
-      } else if (data.type == "pushUpdates") {
-        // Convert the JSON representation to an actual ChangeSet
-        // instance
-        let received = data.updates.map((json) => ({
-          clientID: json.clientID,
-          changes: ChangeSet.fromJSON(json.changes),
-        }));
-        if (data.version != updates.length)
-          received = rebaseUpdates(received, updates.slice(data.version));
-        for (let update of received) {
-          updates.push(update);
-          doc = update.changes.apply(doc);
-        }
-        resp(true);
-        if (received.length) {
-          // Notify pending requests
-          let json = received.map((update) => ({
-            clientID: update.clientID,
-            changes: update.changes.toJSON(),
-          }));
-          while (pending.length) pending.pop()(json);
-        }
-      } else if (data.type == "getDocument") {
-        console.log({ version: updates.length, doc: doc.toString() });
-        resp({ version: updates.length, doc: doc.toString() });
-      }
-    };
+    const worker = new TestWorker();
     console.log(worker);
     return worker;
   } else {
@@ -129,80 +93,65 @@ function getDocument(connection) {
   }));
 }
 
-async function pushUpdates(connection, version, updates) {
-  connection.postMessage({ type: "pushUpdates", payload: { updates } });
-
-  return new Promise((resolve) => {
-    connection.onmessage = (event) => {
-      if (event.data.type === "updatesPushed") {
-        resolve(true);
-      }
-    };
-  });
+function pushUpdates(connection, version, fullUpdates) {
+  // Strip off transaction data
+  console.log("test", fullUpdates);
+  let updates = fullUpdates.map((u) => ({
+    clientID: u.clientID,
+    changes: u.changes.toJSON(),
+  }));
+  return connection.request({ type: "pushUpdates", version, updates });
 }
 
-async function pullUpdates(connection, version) {
-  connection.postMessage({
-    type: "pullUpdates",
-    payload: { fromVersion: version },
-  });
-
-  return new Promise((resolve) => {
-    connection.onmessage = (event) => {
-      if (event.data.type === "updates") {
-        resolve(event.data.payload);
-      }
-    };
-  });
+function pullUpdates(connection, version) {
+  return connection.request({ type: "pullUpdates", version }).then((updates) =>
+    updates.map((u) => ({
+      changes: ChangeSet.fromJSON(u.changes),
+      clientID: u.clientID,
+    })),
+  );
 }
 
 function peerExtension(startVersion, connection) {
-  let done = false;
+  let plugin = ViewPlugin.fromClass(
+    class {
+      constructor(view) {
+        this.view = view;
+        this.pushing = false;
+        this.done = false;
+        this.pull();
+      }
 
-  const plugin = {
-    view: null,
-    pushingUpdates: false,
+      update(update) {
+        if (update.docChanged) this.push();
+      }
 
-    init(view) {
-      this.view = view;
-      this.pull();
-    },
+      async push() {
+        let updates = sendableUpdates(this.view.state);
+        if (this.pushing || !updates.length) return;
+        this.pushing = true;
+        let version = getSyncedVersion(this.view.state);
+        await pushUpdates(connection, version, updates);
+        this.pushing = false;
+        // Regardless of whether the push failed or new updates came in
+        // while it was running, try again if there's updates remaining
+        if (sendableUpdates(this.view.state).length)
+          setTimeout(() => this.push(), 100);
+      }
 
-    async pull() {
-      const version = getSyncedVersion(this.view.state);
-      const updates = await pullUpdates(connection, version);
-      this.view.dispatch(receiveUpdates(this.view.state, updates));
+      async pull() {
+        while (!this.done) {
+          let version = getSyncedVersion(this.view.state);
+          let updates = await pullUpdates(connection, version);
+          this.view.dispatch(receiveUpdates(this.view.state, updates));
+        }
+      }
 
-      if (!done) {
-        setTimeout(this.pull.bind(this), 5000); // Polling every 5 seconds
+      destroy() {
+        this.done = true;
       }
     },
-
-    async push() {
-      const updates = sendableUpdates(this.view.state);
-      if (this.pushingUpdates || !updates.length) return;
-
-      this.pushingUpdates = true;
-      const version = getSyncedVersion(this.view.state);
-      await pushUpdates(connection, version, updates);
-      this.pushingUpdates = false;
-
-      if (sendableUpdates(this.view.state).length) {
-        this.push();
-      }
-    },
-
-    update(update) {
-      if (update.docChanged) {
-        this.push();
-      }
-    },
-
-    destroy() {
-      done = true;
-    },
-  };
-
+  );
   return [collab({ startVersion }), plugin];
 }
 
@@ -211,11 +160,12 @@ const editorContainer = ref(null);
 
 async function initializeEditor() {
   console.log("doc");
-  const { version, doc } = await getDocument(connection);
-  console.log(doc);
+  const { version } = await getDocument(connection);
+  console.log(Text.of([await getFile()]));
+  console.log(await getFile());
   const state = EditorState.create({
-    doc,
-    extensions: [basicSetup], // peerExtension(version, connection)],
+    doc: Text.of([await getFile()]),
+    extensions: [basicSetup, peerExtension(version, connection)],
   });
   new EditorView({
     state,
@@ -226,9 +176,16 @@ async function initializeEditor() {
 
 const connection = new Connection(worker, () => 100);
 onMounted(async () => {
-  // const { version, doc } = await getDocument(connection);
-  // console.log("hola", doc);
   initializeEditor();
+  const content = await getFile();
+  console.log({
+    clientID: "admin",
+    changes: [[content.length, ...content.split("\n")]],
+  });
+  pushUpdates(connection, 1, {
+    clientID: "admin",
+    changes: [[content.length, ...content.split("\n")]],
+  });
   // const state = EditorState.create({
   //   doc: Text.of(["Start documen asdas t"]),
   //   extensions: [basicSetup],

@@ -4,12 +4,16 @@
 
 import { ChangeSet, Text } from "@codemirror/state";
 import { rebaseUpdates } from "@codemirror/collab";
-
+//import { getFile } from "~/supabase";
 // The updates received so far (updates.length gives the current
 // version)
 let updates = [];
+
 // The current document
-let doc = Text.of(["Start document"]);
+
+let doc = Text.of([
+  "Start document sada aSAsdfjksdf asd dsa dsad s dsfnjkjnsdf dfsfssdfsasd",
+]);
 
 //!authorityMessage
 
