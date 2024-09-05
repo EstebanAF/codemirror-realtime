@@ -164,7 +164,7 @@ async function initializeEditor() {
   console.log(Text.of([await getFile()]));
   console.log(await getFile());
   const state = EditorState.create({
-    doc: Text.of([await getFile()]),
+    doc: Text.of((await getFile()).split("\n")),
     extensions: [basicSetup, peerExtension(version, connection)],
   });
   new EditorView({
