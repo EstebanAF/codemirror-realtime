@@ -18,7 +18,6 @@ async function getFile() {
     .eq("branch", "main")
     .eq("file_path", "api/index.js")
     .single();
-  console.log(file.content);
   return file.content;
 }
 

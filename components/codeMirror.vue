@@ -16,22 +16,6 @@ import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
 import { supabase, getFile } from "~/supabase";
 import TestWorker from "~/worker/worker?worker";
 
-supabase
-  .channel("custom-filter-channel")
-  .on(
-    "postgres_changes",
-    {
-      event: "*",
-      schema: "public",
-      table: "files",
-      filter: "github_repo_name=eq.manifest-project-CFE9NU",
-    },
-    (payload) => {
-      console.log("Change received!", payload);
-    },
-  )
-  .subscribe();
-
 function createConnectionWorker() {
   if (typeof Worker !== "undefined") {
     const worker = new TestWorker();
@@ -46,6 +30,42 @@ function createConnectionWorker() {
 function pause(time) {
   return new Promise((resolve) => setTimeout(resolve, time));
 }
+
+supabase
+  .channel("custom-filter-channel")
+  .on(
+    "postgres_changes",
+    {
+      event: "*",
+      schema: "public",
+      table: "files",
+      filter: "github_repo_name=eq.manifest-project-CFE9NU",
+    },
+    (payload) => {
+      console.log("pay", payload);
+      if (
+        payload.eventType === "UPDATE" &&
+        payload.new.file_path === "api/index.js" &&
+        payload.new.github_repo_name === "manifest-project-CFE9NU" &&
+        payload.new.branch === "main"
+      ) {
+        if (true) {
+          const changes = ChangeSet.of([
+            {
+              from: 0,
+              to: payload.new.content.length,
+              insert: payload.new.content,
+            },
+          ]);
+          console.log("realtime ", changes);
+          const update = { clientID: "remote", changes };
+          // this.view.dispatch(receiveUpdates(this.view.state, [update]));
+          pushUpdates(connection, 1, [update]);
+        }
+      }
+    },
+  )
+  .subscribe();
 
 class Connection {
   disconnected = null;
@@ -128,6 +148,7 @@ function peerExtension(startVersion, connection) {
 
       async push() {
         let updates = sendableUpdates(this.view.state);
+        // console.log("update:", updates);
         if (this.pushing || !updates.length) return;
         this.pushing = true;
         let version = getSyncedVersion(this.view.state);
@@ -182,10 +203,13 @@ onMounted(async () => {
     clientID: "admin",
     changes: [[content.length, ...content.split("\n")]],
   });
-  pushUpdates(connection, 1, {
-    clientID: "admin",
-    changes: [[content.length, ...content.split("\n")]],
-  });
+  console.log(editorContainer.value);
+  // pushUpdates(connection, 12, [
+  //   {
+  //     clientID: "admin",
+  //     changes: [content.length, ...content.split("\n")],
+  //   },
+  // ]);
   // const state = EditorState.create({
   //   doc: Text.of(["Start documen asdas t"]),
   //   extensions: [basicSetup],

@@ -20,7 +20,7 @@ let doc = Text.of([
 let pending = [];
 
 onmessage = (event) => {
-  console.log(event.data);
+  console.log("testup", updates);
   function resp(value) {
     event.ports[0].postMessage(JSON.stringify(value));
   }
