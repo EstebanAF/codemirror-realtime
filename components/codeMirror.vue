@@ -13,8 +13,15 @@ import {
 import { basicSetup } from "codemirror";
 import { ChangeSet, EditorState, Text } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import { supabase, getFile } from "~/supabase";
+import { supabase, getFile, setUpdates } from "~/supabase";
 import TestWorker from "~/worker/worker?worker";
+
+const props = defineProps({
+  userid: {
+    type: String,
+    required: true,
+  },
+});
 
 function createConnectionWorker() {
   if (typeof Worker !== "undefined") {
@@ -42,25 +49,17 @@ supabase
       filter: "github_repo_name=eq.manifest-project-CFE9NU",
     },
     (payload) => {
-      console.log("pay", payload);
       if (
         payload.eventType === "UPDATE" &&
         payload.new.file_path === "api/index.js" &&
         payload.new.github_repo_name === "manifest-project-CFE9NU" &&
-        payload.new.branch === "main"
+        payload.new.branch === "main" &&
+        payload.new.changesBy !== props.userid
       ) {
         if (true) {
-          const changes = ChangeSet.of([
-            {
-              from: 0,
-              to: payload.new.content.length,
-              insert: payload.new.content,
-            },
-          ]);
-          console.log("realtime ", changes);
-          const update = { clientID: "remote", changes };
+          console.log("realtime ", payload.new.updates);
           // this.view.dispatch(receiveUpdates(this.view.state, [update]));
-          pushUpdates(connection, 1, [update]);
+          pushUpdatesRealtime(connection, payload.new.updates);
         }
       }
     },
@@ -113,16 +112,45 @@ function getDocument(connection) {
   }));
 }
 
-function pushUpdates(connection, version, fullUpdates) {
+function setDataWorker(connection, docContent, updates) {
+  return connection.request({ type: "initDoc", doc: docContent, updates });
+}
+
+async function pushUpdates(connection, version, fullUpdates) {
   // Strip off transaction data
   console.log("test", fullUpdates);
   let updates = fullUpdates.map((u) => ({
     clientID: u.clientID,
     changes: u.changes.toJSON(),
   }));
-  return connection.request({ type: "pushUpdates", version, updates });
+  const allUpdates = await connection.request({
+    type: "pushUpdates",
+    version,
+    updates,
+  });
+  const { doc } = await getDocument(connection);
+  console.log(doc);
+  setUpdates(allUpdates, doc.text.join("\n"), props.userid);
+  return allUpdates;
 }
 
+async function pushUpdatesRealtime(connection, fullUpdates) {
+  // Strip off transaction data
+  console.log("test realtime", fullUpdates);
+
+  const { doc, version } = await getDocument(connection);
+  console.log("version", version);
+  const allUpdates = await connection.request({
+    type: "pushRealtime",
+    version,
+    fullUpdates,
+  });
+  //console.log(doc);
+  //setUpdates(allUpdates, doc.text.join("\n"), props.userid);
+  //console.log([versionlocal.value, allUpdates.length]);
+  //versionlocal.value = allUpdates.length || 0;
+  return allUpdates;
+}
 function pullUpdates(connection, version) {
   return connection.request({ type: "pullUpdates", version }).then((updates) =>
     updates.map((u) => ({
@@ -157,13 +185,14 @@ function peerExtension(startVersion, connection) {
         // Regardless of whether the push failed or new updates came in
         // while it was running, try again if there's updates remaining
         if (sendableUpdates(this.view.state).length)
-          setTimeout(() => this.push(), 100);
+          setTimeout(() => this.push(), 1000);
       }
 
       async pull() {
-        while (!this.done) {
+        while (true) {
           let version = getSyncedVersion(this.view.state);
           let updates = await pullUpdates(connection, version);
+          console.log("pull", updates);
           this.view.dispatch(receiveUpdates(this.view.state, updates));
         }
       }
@@ -181,43 +210,22 @@ const editorContainer = ref(null);
 
 async function initializeEditor() {
   console.log("doc");
-  const { version } = await getDocument(connection);
-  console.log(Text.of([await getFile()]));
-  console.log(await getFile());
+  await setDataWorker(connection, ...(await getFile()));
+  const { version, doc } = await getDocument(connection);
   const state = EditorState.create({
-    doc: Text.of((await getFile()).split("\n")),
+    doc,
     extensions: [basicSetup, peerExtension(version, connection)],
   });
   new EditorView({
     state,
     parent: editorContainer.value,
   });
-  console.log(editorContainer.value);
 }
 
 const connection = new Connection(worker, () => 100);
+
 onMounted(async () => {
-  initializeEditor();
-  const content = await getFile();
-  console.log({
-    clientID: "admin",
-    changes: [[content.length, ...content.split("\n")]],
-  });
-  console.log(editorContainer.value);
-  // pushUpdates(connection, 12, [
-  //   {
-  //     clientID: "admin",
-  //     changes: [content.length, ...content.split("\n")],
-  //   },
-  // ]);
-  // const state = EditorState.create({
-  //   doc: Text.of(["Start documen asdas t"]),
-  //   extensions: [basicSetup],
-  // });
-  // new EditorView({
-  //   state,
-  //   parent: editorContainer.value,
-  // });
+  await initializeEditor();
 });
 
 onBeforeUnmount(() => {
