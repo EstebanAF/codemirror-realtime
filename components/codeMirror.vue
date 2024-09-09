@@ -13,8 +13,9 @@ import {
 import { basicSetup } from "codemirror";
 import { ChangeSet, EditorState, Text } from "@codemirror/state";
 import { EditorView, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import { supabase, getFile, setUpdates } from "~/supabase";
+import { supabase, getFile, setUpdates, deleteUser } from "~/supabase";
 import TestWorker from "~/worker/worker?worker";
+import debounce from "lodash/debounce";
 
 const props = defineProps({
   userid: {
@@ -45,7 +46,7 @@ supabase
     {
       event: "*",
       schema: "public",
-      table: "files",
+      table: "realtime",
       filter: "github_repo_name=eq.manifest-project-CFE9NU",
     },
     (payload) => {
@@ -116,6 +117,10 @@ function setDataWorker(connection, docContent, updates) {
   return connection.request({ type: "initDoc", doc: docContent, updates });
 }
 
+const debouncedSetUpdates = debounce((allUpdates, docText, userId) => {
+  setUpdates(allUpdates, docText, userId);
+}, 200);
+
 async function pushUpdates(connection, version, fullUpdates) {
   // Strip off transaction data
   console.log("test", fullUpdates);
@@ -130,7 +135,7 @@ async function pushUpdates(connection, version, fullUpdates) {
   });
   const { doc } = await getDocument(connection);
   console.log(doc);
-  setUpdates(allUpdates, doc.text.join("\n"), props.userid);
+  debouncedSetUpdates(allUpdates, doc.text.join("\n"), props.userid);
   return allUpdates;
 }
 
@@ -151,6 +156,7 @@ async function pushUpdatesRealtime(connection, fullUpdates) {
   //versionlocal.value = allUpdates.length || 0;
   return allUpdates;
 }
+
 function pullUpdates(connection, version) {
   return connection.request({ type: "pullUpdates", version }).then((updates) =>
     updates.map((u) => ({
@@ -202,7 +208,7 @@ function peerExtension(startVersion, connection) {
       }
     },
   );
-  return [collab({ startVersion }), plugin];
+  return [collab({ startVersion, clientID: props.userid }), plugin];
 }
 
 const editor = ref(null);
@@ -210,7 +216,7 @@ const editorContainer = ref(null);
 
 async function initializeEditor() {
   console.log("doc");
-  await setDataWorker(connection, ...(await getFile()));
+  await setDataWorker(connection, ...(await getFile(props.userid)));
   const { version, doc } = await getDocument(connection);
   const state = EditorState.create({
     doc,
@@ -222,12 +228,14 @@ async function initializeEditor() {
   });
 }
 
-const connection = new Connection(worker, () => 100);
+const connection = new Connection(worker, () => 200);
 
 onMounted(async () => {
   await initializeEditor();
 });
-
+onUnmounted(async () => {
+  await deleteUser(props.userid);
+});
 onBeforeUnmount(() => {
   if (editor.value) {
     editorContainer.value.destroy();
